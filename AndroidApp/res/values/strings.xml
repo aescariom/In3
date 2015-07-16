@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">In3</string>
+
+    <!-- TABS -->
+    <string name="pairedDevices">Paired devices</string>
+    <string name="discoverDevices">Discover devices</string>
+
+    <!-- NAMES -->
+    <string name="bluetooth">Bluetooth</string>
+
+    <!-- MODIFYERS -->
+    <string name="on">on</string>
+    <string name="off">off</string>
+</resources>
