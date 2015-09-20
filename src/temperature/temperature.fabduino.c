@@ -185,7 +185,11 @@ ISR(TWI_vect){
 
 void turnOnFans(){
   OCR0A=255;
-  OCR0B=127;
+  OCR0B=50;
+}
+
+void turnOffFanB(){
+  OCR0B=0;
 }
 
 void turnOffFans(){
@@ -271,6 +275,11 @@ int i = 0;
    		
    		if(targetTemp > temperature){
 	     	turnOnFans();
+	     	/*if(i<60 != 0){
+	     		turnOffFanB();
+	     	}else if(i >= 90){
+	     		i = 0;
+	     	}*/
 	     	heat();
      	}else if(targetTemp < temperature){
 	     	turnOnFans();
@@ -279,6 +288,6 @@ int i = 0;
      		turnOffFans();
      	}
    		_delay_ms(1000);
-   		
+   		++i;
    }
 }
