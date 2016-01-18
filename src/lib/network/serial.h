@@ -2,7 +2,7 @@
 #define _H_SERIAL_ 1
 
 #ifndef F_CPU
-	#define F_CPU 8000000
+	#define F_CPU 16000000
 #endif
 #ifndef BAUD
     #define BAUD 9600

@@ -1,7 +1,7 @@
 PROJECT=brain.fabduino
-SOURCES=../lib/network/serial.c $(PROJECT).c
+SOURCES=../lib/network/serial.c ../lib/output/rgb.cpp  ../lib/output/lcd.cpp ../lib/input/switch.cpp ../lib/input/rotary.c ../lib/operators/new.c $(PROJECT).c
 MMCU=atmega168
-F_CPU = 8000000
+F_CPU = 16000000
 
 CFLAGS=-mmcu=$(MMCU) -Wall -Os -DF_CPU=$(F_CPU)
 
@@ -10,7 +10,7 @@ $(PROJECT).hex: $(PROJECT).out
 	avr-size --mcu=$(MMCU) --format=avr $(PROJECT).out
  
 $(PROJECT).out: $(SOURCES)
-	avr-gcc $(CFLAGS) -I./ -o $(PROJECT).out $(SOURCES)
+	avr-c++ $(CFLAGS) -I./ -o $(PROJECT).out $(SOURCES)
  
 program-bsd: $(PROJECT).hex
 	avrdude -p $(MMCU) -c bsd -U flash:w:$(PROJECT).c.hex

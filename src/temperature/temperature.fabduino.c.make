@@ -1,7 +1,7 @@
 PROJECT=temperature.fabduino
 SOURCES=../lib/operators/new.c ../lib/output/fan.cpp ../lib/output/relay.cpp ../lib/output/led.cpp $(PROJECT).c
 MMCU=atmega168
-F_CPU = 8000000
+F_CPU = 16000000
 
 CFLAGS=-mmcu=$(MMCU) -Wall -Os -DF_CPU=$(F_CPU)
 

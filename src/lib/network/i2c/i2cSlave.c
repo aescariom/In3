@@ -9,7 +9,7 @@ void i2c_init_slave(){
     TWAR = my_addr;
     TWDR = 0x00;
     // SCL freq = F_CPU/(16+2(TWBR)*prescalerValue)
-    TWBR = 32;  // Bit rate
+    TWBR = 12;  // Bit rate
     TWSR = (0 << TWPS1) | (0 << TWPS0); // Setting prescalar bits
     TWCR = (1<<TWINT) | (1<<TWEA) | (1<<TWEN) | (1<<TWIE);    // get ACK, en TWI, clear int flag
     sei();

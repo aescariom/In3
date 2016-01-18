@@ -20,6 +20,8 @@
 #include "../lib/output/relay.h"
 #include "../lib/operators/new.h"
 
+#include "../lib/output/led.h"
+
 #define output(directions,pin) (directions |= pin) // set port direction for output
 #define input(directions,pin) (directions &= (~pin)) // set port direction for input
 #define set(port,pin) (port |= pin) // set port pin
@@ -27,6 +29,8 @@
 #define pin_test(pins,pin) (pins & pin) // test for port pin
 #define bit_test(byte,bit) (byte & (1 << bit)) // test for bit set
 
+#define TWI_FREQ 100000L
+#define CPU_FREQ 16000000L
 
 #define DHT_DIR DDRD
 #define DHT_PORT PORTD
@@ -37,21 +41,20 @@
 #define PUMP_DIRECTION DDRD
 #define PUMP_PORT PORTD
 
-
-
 #define LED_DIRECTION DDRB
 #define LED_PORT PORTB
 #define LED_PIN (1 << PB5)
 
 #define DHT_TIMEOUT 200
 
-unsigned char my_addr = 0x20;
+unsigned char my_addr = 0x28;
 unsigned char regaddr, regdata;
 
 Fan* fan1;
 Fan* fan2;
 Relay* relay1;
 Relay* relay2;
+Led* led;
 
 volatile int8_t temperature, humidity, targetTemp;
 
@@ -59,7 +62,8 @@ void i2c_init_slave(){
     TWAR = my_addr;
     TWDR = 0x00;
     // SCL freq = F_CPU/(16+2(TWBR)*prescalerValue)
-    TWBR = 32;  // Bit rate
+	TWBR = 72;
+    //TWBR = 72;  // Bit rate
     TWSR = (0 << TWPS1) | (0 << TWPS0); // Setting prescalar bits
     TWCR = (1<<TWINT) | (1<<TWEA) | (1<<TWEN) | (1<<TWIE);    // get ACK, en TWI, clear int flag
 }
@@ -159,11 +163,11 @@ ISR(TWI_vect){
       break;
     case TW_ST_SLA_ACK:      // 0xA8: SLA+R received, ACK returned
     	if(state == 'T'){
-      		TWDR = temperature;           // Fill TWDR register whith the data to be sent 
+    		TWDR = temperature;           // Fill TWDR register whith the data to be sent 
       	}else if(state == 'H'){
       		TWDR = humidity;
       	}else{
-      		TWDR = -1;
+      		TWDR = 0;
       	}
       TWCR = ((1 << TWEA) | (1 << TWINT) | (1 << TWEN) | (1 << TWIE));   // Enable TWI, Clear TWI interrupt flag
       break;
@@ -185,7 +189,7 @@ ISR(TWI_vect){
 
 void turnOnFans(){
   OCR0A=255;
-  OCR0B=50;
+  OCR0B=255;
 }
 
 void turnOffFanB(){
@@ -200,13 +204,15 @@ void turnOffFans(){
 void init(){
 	fan1 = new Fan(&PORTD, &DDRD, PD6);
 	fan2 = new Fan(&PORTD, &DDRD, PD5);
-	relay1 = new Relay(&PORTD, &DDRD, PD1);
-	relay2 = new Relay(&PORTD, &DDRD, PD2);
+    relay1 = new Relay(&PORTD, &DDRD, PD1);
+    relay2 = new Relay(&PORTD, &DDRD, PD2);
+    led = new Led(&PORTB, &DDRB, PB5);
 	
 	fan1->init();
 	fan2->init();
 	relay1->init();
 	relay2->init();
+    led->init();
 }
 
 void heat(){
@@ -220,7 +226,6 @@ void cool(){
 }
 
 int main() {
-   //output(LED_DIRECTION, LED_PIN);
 	int8_t temperature1, humidity1;
 	int8_t temperature2, humidity2;
 
@@ -232,30 +237,30 @@ int main() {
    	DDRD   |= (1 << PD5);
    	DDRD   |= (1 << PD6);
    	
-  PORTD = 0x00;
-  // Initial TIMER0 Fast PWM
-  // Fast PWM Frequency = fclk / (N * 256), Where N is the Prescaler
-  // f_PWM = 11059200 / (64 * 256) = 675 Hz
-  TCCR0A = 0b10100011; // Fast PWM 8 Bit, Clear OCA0/OCB0 on Compare Match, Set on TOP
-  TCCR0B = 0b00000011; // Used 64 Prescaler
-  TCNT0 = 0;           // Reset TCNT0
-  OCR0A = 0;           // Initial the Output Compare register A & B
-  OCR0B = 0;
-  OCR0A=0;	// Initial Duty Cycle for Channel A
-  OCR0B=0;	// Initial Duty Cycle for Channel B
-
-int i = 0;
+    PORTD = 0x00;
+    // Initial TIMER0 Fast PWM
+    // Fast PWM Frequency = fclk / (N * 256), Where N is the Prescaler
+    // f_PWM = 11059200 / (64 * 256) = 675 Hz
+    TCCR0A = 0b10100011; // Fast PWM 8 Bit, Clear OCA0/OCB0 on Compare Match, Set on TOP
+    TCCR0B = 0b00000011; // Used 64 Prescaler
+    TCNT0 = 0;           // Reset TCNT0
+    OCR0A = 0;           // Initial the Output Compare register A & B
+    OCR0B = 0;
+    OCR0A=0;	// Initial Duty Cycle for Channel A
+    OCR0B=0;	// Initial Duty Cycle for Channel B
+    
+    int i = 0;
    	while (1){
-   		if(dht_gettemperaturehumidity(&temperature1, &humidity1, &PORTD, &PIND, &DDRD, PD3) != 0){
+  		if(dht_gettemperaturehumidity(&temperature1, &humidity1, &PORTD, &PIND, &DDRD, PD3) != 0){
    			temperature1 = -1;
-   			humidity1 = -1;
+            humidity1 = -1;
    		}
    		if(dht_gettemperaturehumidity(&temperature2, &humidity2, &PORTD, &PIND, &DDRD, PD4) != 0){
    			temperature2 = -1;
-   			humidity2 = -1;
+            humidity2 = -1;
    		}
    		if(temperature1 == -1 && temperature2 == -1){
-   			temperature = 0;
+   			temperature = -1;
    		}else if(temperature1 == -1){
    			temperature = temperature2;
    		}else if(temperature2 == -1){
@@ -264,7 +269,7 @@ int i = 0;
    			temperature = (temperature1 + temperature2) / 2;
    		}
    		if(humidity1 == -1 && humidity2 == -1){
-   			humidity = 0;
+   			humidity = -1;
    		}else if(humidity1 == -1){
    			humidity = humidity2;
    		}else if(humidity2 == -1){
@@ -275,19 +280,12 @@ int i = 0;
    		
    		if(targetTemp > temperature){
 	     	turnOnFans();
-	     	/*if(i<60 != 0){
-	     		turnOffFanB();
-	     	}else if(i >= 90){
-	     		i = 0;
-	     	}*/
 	     	heat();
      	}else if(targetTemp < temperature){
 	     	turnOnFans();
 	     	cool();
      	}else{
-     		turnOffFans();
+     		turnOffFanB();
      	}
-   		_delay_ms(1000);
-   		++i;
    }
 }
