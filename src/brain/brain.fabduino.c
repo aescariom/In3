@@ -9,40 +9,46 @@
 
 #include <avr/io.h>
 #include <util/delay.h>
-#include <util/twi.h>
+#include <inttypes.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <avr/pgmspace.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
 
 #include "../lib/network/serial.h"
-#include "../lib/output/rgb.h"
-#include "../lib/output/lcd.h"
-
+#include "../lib/output/lcdi2c.h"
+#include "../lib/output/fan.h"
+#include "../lib/output/led.h"
+#include "../lib/output/relay.h"
+#include "../lib/output/buzzer.h"
+#include "../lib/ext/i2chw/i2cmaster.h"
+#include "../lib/ext/dht22/dht22.h"
 #include "../lib/input/switch.h"
 #include "../lib/input/rotary.h"
 
-#define output(directions,pin) (directions |= pin) // set port direction for output
-#define input(directions,pin) (directions &= (~pin)) // set port direction for input
-#define set(port,pin) (port |= pin) // set port pin
-#define clear(port,pin) (port &= (~pin)) // clear port pin
-#define pin_test(pins,pin) (pins & pin) // test for port pin
-#define bit_test(byte,bit) (byte & (1 << bit)) // test for bit set
-
 #define TWI_TIMEOUT 200
+#define DHT_TIMEOUT 200
 
-#define TWI_FREQ 100000L
-#define CPU_FREQ 16000000L
+int errorCount = 0;
+float temperature = 0;
+float humidity = 0;
+int readErrors = 0;
+unsigned char tempFlag = ' ';
+unsigned char humFlag = ' ';
+volatile unsigned char targetTemperature = 36;
 
 volatile unsigned char auxTargetTemperature = 0;
 volatile bool changeTargetTemp = false;
-volatile unsigned char targetTemperature = 36;
+
+char buff[6];
 
 volatile unsigned char menuOpt = 1;
 volatile bool menuEnabled = false;
 volatile bool temperatureMenu = false;
 
-unsigned char temperature_addr = 0x28; 
-unsigned char temperature = 0;
-unsigned char humidity = 0;
-
-char buff[6];
+struct dht22 *dht;
 
 //Menu Strings
 const char MENU[2][20] = {
@@ -50,138 +56,118 @@ const char MENU[2][20] = {
     "%c Change temp"
 };
 
-RGB* rgb;
+Led* led;
+Buzzer* buzzer;
+LCD_I2C* lcd;
 Switch* sw_rotary;
-LCD* lcd;
+Fan* fan1;
+Fan* fan2;
+Relay* relay1;
+Relay* relay2;
 
 
 
-void i2c_init_master(){
-    // SCL freq = F_CPU/(16+2(TWBR)*prescalerValue)
-	TWBR = 72;//((CPU_FREQ / TWI_FREQ) - 16) / 2;
-    TWSR = (0 << TWPS1) | (0 << TWPS0); // Setting prescalar bits
+void turnOnFans(){
+  OCR0A=255; // 5V
+  OCR0B=255; // 12V
 }
 
-void i2c_waitforTWSR(int var){
-	int ticks = 0;
-	while((TWSR & 0xF8)!= var && ticks < TWI_TIMEOUT){
-		++ticks;
-	}
+void turnOffFanB(){
+  OCR0B=0;
 }
 
-void i2c_waitforTWCR(int var){
-	int ticks = 0;
-	while(!(TWCR & (1 << var)) && ticks < TWI_TIMEOUT){
-		++ticks;
-	}
+void turnOffFanA(){
+  OCR0A=0;
 }
 
-void i2c_start(){
-   TWCR = (1<<TWINT) | (1<<TWSTA) | (1<<TWEN); // put start condition
-   i2c_waitforTWCR(TWINT); // wait until start condition is transmitted
-   i2c_waitforTWSR(TW_START); // wait for ACK
-}
-
-void i2c_repeated_start(){
-   TWCR = (1<<TWINT) | (1<<TWSTA) | (1<<TWEN); // put start condition
-   i2c_waitforTWCR(TWINT); // wait until start condition is transmitted
-   i2c_waitforTWSR(TW_REP_START); // wait for ACK  
-}
-
-void i2c_stop(){
-    TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWSTO);  // put stop condition
-    i2c_waitforTWCR(TWSTO);  // wait until stop condition is transmitted
-}
-
-void i2c_write_address(unsigned char addr)
-{
-    TWDR = addr;  // write addr to "call"
-    TWCR = (1 << TWINT) | (1 << TWEN);    // Enable TWI and clear interrupt flag
-    i2c_waitforTWCR(TWINT); // Wait until TWDR byte is transmitted
-    i2c_waitforTWSR(TW_MT_SLA_ACK);  // Check for the acknowledgement
-}
-
-void i2c_write_data(unsigned char data)
-{
-    TWDR = data;  // write data in TWDR
-    TWCR = (1 << TWINT) | (1 << TWEN);    // clc TWI interrupt flag,En TWI
-    i2c_waitforTWCR(TWINT); // Wait until TWDR byte transmitted
-   	i2c_waitforTWSR(TW_MT_DATA_ACK); // Check for the acknowledgement
-}
-
-void i2c_read_address(unsigned char data)
-{
-    TWDR=data;  // Address and read instruction
-    TWCR=(1<<TWINT)|(1<<TWEN);    // clc TWI interrupt flag,En TWI
-    i2c_waitforTWCR(TWINT); // Wait until TWDR byte transmitted
-    i2c_waitforTWSR(TW_MR_SLA_ACK);  // Check for the acknowledgement
-}
-
-
-unsigned char i2c_read_data()
-{
-    TWCR=(1<<TWINT)|(1<<TWEN);    // clc TWI interrupt flag,En TWI
-    i2c_waitforTWCR(TWINT); // Wait until TWDR byte transmitted
-    i2c_waitforTWSR(TW_MR_DATA_NACK); // Check for the acknowledgement
-
-	unsigned char ret = TWDR;
-	
-    return ret;
+void turnOffFans(){
+  OCR0A=0;
+  OCR0B=0;
 }
 
 void init(){
-    sw_rotary = new Switch(&PORTD, &DDRD, &PIND, PD4);
-    sw_rotary->init();
-    rgb = new RGB(&PORTB, &DDRB, &PINB, PB2, PB1, PB5);
-    lcd = new LCD();
-    lcd->setDb7(&PORTC, &DDRC, PC3);
-    lcd->setDb6(&PORTC, &DDRC, PC2);
-    lcd->setDb5(&PORTC, &DDRC, PC1);
-    lcd->setDb4(&PORTC, &DDRC, PC0);
-    lcd->setE(&PORTD, &DDRD, PD6);
-    lcd->setRs(&PORTD, &DDRD, PD7);
+	i2c_init();
+	
+   	DDRD   |= (1 << PD5);
+   	DDRD   |= (1 << PD6);
+   	
+    PORTD = 0x00;
+    // Initial TIMER0 Fast PWM
+    // Fast PWM Frequency = fclk / (N * 256), Where N is the Prescaler
+    // f_PWM = 11059200 / (64 * 256) = 675 Hz
+    TCCR0A = 0b10100011; // Fast PWM 8 Bit, Clear OCA0/OCB0 on Compare Match, Set on TOP
+    TCCR0B = 0b00000011; // Used 64 Prescaler
+    TCNT0 = 0;           // Reset TCNT0
+    OCR0A = 0;           // Initial the Output Compare register A & B
+    OCR0B = 0;
+    OCR0A=0;	// Initial Duty Cycle for Channel A
+    OCR0B=0;	// Initial Duty Cycle for Channel B
     
-    lcd->init();
-    lcd->erase();
-    lcd->cursorOff();
-    rgb->init();
     initRotary();
+
+	led = new Led(&PORTD, &DDRD, PD4);
     
-    usart_init(R_UBRR);
-   	i2c_init_master();
+    led->init();
+	led->toggle();
+    
+    lcd = new LCD_I2C(0x27, 16, 2);
+    lcd->backlight(1);    
+	lcd->init();
+	
+	buzzer = new Buzzer(&PORTD, &DDRD, PD0);
+    buzzer->init();
+    
+    sw_rotary = new Switch(&PORTD, &DDRD, &PIND, PD1);
+    sw_rotary->init();
+    
+	fan1 = new Fan(&PORTD, &DDRD, PD6);
+	fan2 = new Fan(&PORTD, &DDRD, PD5);
+	
+	fan1->init();
+	fan2->init();
+	turnOffFans();
+	
+    relay1 = new Relay(&PORTD, &DDRD, PD7);
+    relay2 = new Relay(&PORTB, &DDRB, PB0);
+	relay1->init();
+	relay2->init();
+    
    	sei();
-}
+}	
 
 void freeAll(){
-    delete(sw_rotary);
-    delete(rgb);
+    delete(led);
     delete(lcd);
+    delete(buzzer);
+    delete(sw_rotary);
 }
 
 void printVars(){
     char line[16];
-    sprintf(line, "Temp.: %2i/%2i%cC", temperature, targetTemperature, 0b11011111);
-    lcd->println(line, 1);
-    sprintf(line, "Humidity: %3i%%", humidity);
-    lcd->println(line, 2);
+    sprintf(line, "%cTemp.:  %2i/%2i%cC", tempFlag, (int)temperature, targetTemperature, 0b11011111);
+	lcd->println(line, 0);
+    sprintf(line, "%cHumidity:  %3i%%", humFlag, (int)humidity);
+	lcd->println(line, 1);
 }
 
 void printMenu(){
     char line[16];
     sprintf(line, MENU[0], menuOpt == 0 ? '>' : ' ');
-    lcd->println(line, 1);
+    lcd->println(line, 0);
     sprintf(line, MENU[1], menuOpt == 1 ? '>' : ' ');
-    lcd->println(line, 2);
+    lcd->println(line, 1);
 }
 
 void printChangingTargetTemperature(){
     char line[16];
     sprintf(line, "%2i%cC", auxTargetTemperature, 0b11011111);
-    lcd->println(line, 2);
+    lcd->println(line, 1);
 }
 
 void printTemperatureMenu(){
-    lcd->println("Set new value:", 1);
+    char line[16];
+    sprintf(line, "Set new value:");
+    lcd->println(line, 0);
     auxTargetTemperature = targetTemperature;
     printChangingTargetTemperature();
 }
@@ -189,13 +175,13 @@ void printTemperatureMenu(){
 void menuAction(volatile unsigned char opt){
     switch(opt){
         case 0:
-            lcd->erase();
+            lcd->clear();
             printVars();
             menuEnabled = false;
             temperatureMenu = false;
             break;
         case 1:
-            lcd->erase();
+            lcd->clear();
             printTemperatureMenu();
             menuEnabled = false;
             temperatureMenu = true;
@@ -203,69 +189,98 @@ void menuAction(volatile unsigned char opt){
     }
 }
 
-unsigned char readTemperature(){
-	unsigned char temp;
-	i2c_start();
-    i2c_write_address(temperature_addr);
-    i2c_write_data('T');
-    i2c_stop();
-    
-	i2c_start();
-    i2c_read_address(temperature_addr+1);
-    temp = i2c_read_data();
-    i2c_stop();
-    
-    return temp;
+void heat(){
+	relay1->close();
+   	relay2->open();
 }
 
-unsigned char readHumidity(){
-	unsigned char hum;
-	i2c_start();
-    i2c_write_address(temperature_addr);
-    i2c_write_data('H');
-    i2c_stop();
-    
-	i2c_start();
-    i2c_read_address(temperature_addr+1);
-    hum = i2c_read_data();
-    i2c_stop();
-    
-    return hum;
+void cool(){
+	relay2->open();
+   	relay1->close();
 }
 
-void sendInt(char tag, int val){
-    usart_putchar(1);
-    usart_putchar(2);
-    usart_putchar(3);
-    usart_putchar(4);
-    usart_putchar(tag);
-    usart_putchar(val);
-    usart_putchar(0);
+void none(){
+	relay2->close();
+   	relay1->close();
 }
 
-ISR (USART_RX_vect) {
-	buff[0] = buff[1];
-	buff[1] = buff[2];
-	buff[2] = buff[3];
-	buff[3] = buff[4];
-	buff[4] = buff[5];
-	buff[5] = UDR0;
-	if(buff[0] == 1 && buff[1] == 2 && buff[2] == 3 && buff[3] == 4){
-		targetTemperature=buff[4];
-	}
+void getTempAndHum(){
+	float temperature1, humidity1;
+	float temperature2, humidity2;
+	tempFlag = humFlag = ' ';
+	if(dht_gettemperaturehumidity(&temperature1, &humidity1, &PORTC, &PINC, &DDRC, PC0) != 0){
+   		temperature1 = -1;
+        humidity1 = -1;
+        humFlag = tempFlag = '?';
+   	}
+   	if(dht_gettemperaturehumidity(&temperature2, &humidity2, &PORTC, &PINC, &DDRC, PC1) != 0){
+   		temperature2 = -1;
+        humidity2 = -1;
+        humFlag = tempFlag = '?';
+   	}
+   	if(temperature1 < 0 && temperature2 < 0){
+   		errorCount++;
+   		if(errorCount > 10){
+   			temperature = -1;
+   		}
+   	}else if(temperature1 < 0){
+   		temperature = temperature2;
+   		errorCount = 0;
+   	}else if(temperature2 < 0){
+   		temperature = temperature1;
+   		errorCount = 0;
+   	}else{
+   		temperature = (temperature1 + temperature2) / 2;
+   		errorCount = 0;
+   	}
+   	if(tempFlag != '?'){
+   		int diff = temperature1 - temperature2;
+   		if(diff > 3 || diff < -3){
+   			tempFlag = '!';
+   		}
+   	}
+   	if(humidity1 < 0 && humidity2 < 0){
+   		humidity = -1;
+   	}else if(humidity1 < 0){
+   		humidity = humidity2;
+   	}else if(humidity2 < 0){
+   		humidity = humidity1;
+   	}else{
+   		humidity = (humidity1 + humidity2) / 2;
+   	}
+   	
+   	if(humFlag != '?'){
+   		int diff = humidity1 - humidity2;
+   		if(diff > 10 || diff < -10){
+   			humFlag = '!';
+   		}
+   	}
 }
 
 int main() {
+    init();
+    
     long lastEncoderValue = 0;
     char lastTarget = 0;
-    
-    init();
+	unsigned long cycle = 0;
+	unsigned long tempReading=0;
 
     while (1) {
-        if(menuEnabled){
+    char line[16];
+            getTempAndHum();
+    	tempReading++;
+    	if(menuEnabled){
+    		cycle += 1;
+	    	cycle = cycle%400000;
+    		if(cycle == 0){
+            	menuEnabled = false;
+	            temperatureMenu = false;
+    		}
             if(lastEncoderValue < encoderValue){
+            	cycle = 0;
                 ++menuOpt;
             }else if(lastEncoderValue > encoderValue){
+            	cycle = 0;
                 --menuOpt;
             }
             if(lastEncoderValue != encoderValue){
@@ -275,18 +290,29 @@ int main() {
             }
             if(sw_rotary->isPressed()){
                 menuAction(menuOpt);
+        		buzzer->beep();
+        		_delay_ms(250);
             }
         }else if(temperatureMenu){
-            
+    		cycle += 1;
+	    	cycle = cycle%400000;
+    		if(cycle == 0){
+            	menuEnabled = false;
+	            temperatureMenu = false;
+    		}
             if(lastEncoderValue < encoderValue){
+            	led->turnOn();
+            	cycle = 0;
                 ++auxTargetTemperature;
             }else if(lastEncoderValue > encoderValue){
+            	led->turnOff();
+            	cycle = 0;
                 --auxTargetTemperature;
             }
             if(auxTargetTemperature == 255){
+                auxTargetTemperature = 40;
+            }else if(auxTargetTemperature > 40){
                 auxTargetTemperature = 0;
-            }else if(auxTargetTemperature > 50){
-                auxTargetTemperature = 50;
             }
             
             if(lastEncoderValue != encoderValue){
@@ -294,42 +320,44 @@ int main() {
                 lastEncoderValue = encoderValue;
             }
             if(sw_rotary->isPressed()){
+        		buzzer->beep();
                 targetTemperature = auxTargetTemperature;
                 changeTargetTemp = true;
-                lcd->erase();
+                lcd->clear();
                 printVars();
                 menuEnabled = false;
                 temperatureMenu = false;
+        		_delay_ms(250);
             }
         }else{
             if(sw_rotary->isPressed()){
                 menuOpt = 0;
-                lcd->erase();
+                lcd->clear();
                 printMenu();
                 menuEnabled = true;
                 temperatureMenu = false;
                 lastEncoderValue = encoderValue;
+        		buzzer->beep();
+        		_delay_ms(250);
             }else{
+            led->toggle();
                 printVars();
             }
         }
-        if(temperature > targetTemperature){
-            rgb->turnOnBlue();
-        }else if(temperature == targetTemperature){
-            rgb->turnOnGreen();
-        }else{
-            rgb->turnOnRed();
-        }
-
-   		temperature = readTemperature();
-   		humidity = readHumidity();
-   	
-   		i2c_start();
-    	i2c_read_address(temperature_addr);
-	  	i2c_write_data('S');
-      	i2c_write_data(targetTemperature);
-      	i2c_stop();
-    }
+        if(temperature < 0){
+        	none();
+        	turnOffFans();
+        }else if(targetTemperature > temperature){
+	     	turnOnFans();
+	     	heat();
+     	}/*else if(targetTemperature < temperature){
+	     	turnOnFans();
+	     	cool();
+     	}*/else{
+			none();
+     		turnOffFans();
+     	}
+	}
     
     freeAll();
 }

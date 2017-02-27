@@ -1,6 +1,6 @@
 PROJECT=brain.fabduino
-SOURCES=../lib/network/serial.c ../lib/output/rgb.cpp  ../lib/output/lcd.cpp ../lib/input/switch.cpp ../lib/input/rotary.c ../lib/operators/new.c $(PROJECT).c
-MMCU=atmega168
+SOURCES=../lib/network/serial.c ../lib/output/lcdi2c.cpp ../lib/ext/i2chw/twimaster.c ../lib/output/led.cpp ../lib/output/buzzer.cpp ../lib/output/fan.cpp ../lib/output/relay.cpp ../lib/input/switch.cpp ../lib/input/rotary.c ../lib/ext/dht22/dht22.c ../lib/operators/new.c $(PROJECT).c
+MMCU=atmega328p
 F_CPU = 16000000
 
 CFLAGS=-mmcu=$(MMCU) -Wall -Os -DF_CPU=$(F_CPU)
@@ -30,9 +30,9 @@ program-usbtiny: $(PROJECT).hex
 	avrdude -p $(MMCU) -P usb -c usbtiny -U flash:w:$(PROJECT).c.hex
 
 program-usbtiny-fuses: $(PROJECT).hex
-	avrdude -p $(MMCU) -P usb -c usbtiny -U lfuse:w:0xD6:m
-	avrdude -p $(MMCU) -P usb -c usbtiny -U hfuse:w:0xD9:m
-	avrdude -p $(MMCU) -P usb -c usbtiny -U efuse:w:0x07:m
+	avrdude -p $(MMCU) -P usb -c usbtiny -U lfuse:w:0xFF:m
+	avrdude -p $(MMCU) -P usb -c usbtiny -U hfuse:w:0xD8:m
+	avrdude -p $(MMCU) -P usb -c usbtiny -U efuse:w:0xFD:m
 
 program-dragon: $(PROJECT).hex
 	avrdude -p $(MMCU) -P usb -c dragon_isp -U flash:w:$(PROJECT).c.hex
