@@ -25,7 +25,7 @@
 #include "../lib/output/buzzer.h"
 #include "../lib/ext/i2chw/i2cmaster.h"
 #include "../lib/ext/dht22/dht22.h"
-#include "../lib/input/switch.h"
+#include "../lib/input/analogSwitch.h"
 #include "../lib/input/rotary.h"
 
 #define TWI_TIMEOUT 200
@@ -40,7 +40,7 @@ unsigned char tempFlag = ' ';
 unsigned char humFlag = ' ';
 volatile unsigned char targetTemperature = 36;
 
-volatile unsigned char auxTargetTemperature = 0;
+volatile unsigned char auxTargetTemperature = 36;
 volatile bool changeTargetTemp = false;
 
 char buff[6];
@@ -62,7 +62,7 @@ void getTempAndHum();
 Led* led;
 Buzzer* buzzer;
 LCD_I2C* lcd;
-Switch* sw_rotary;
+AnalogSwitch* sw_rotary;
 Fan* fan1;
 Fan* fan2;
 Relay* relay1;
@@ -147,10 +147,10 @@ void init(){
     lcd->backlight(1);    
 	lcd->init();
 	
-	buzzer = new Buzzer(&PORTD, &DDRD, PD0);
-    buzzer->init();
+	/*buzzer = new Buzzer(&PORTD, &DDRD, PD0);
+    buzzer->init();*/
     
-    sw_rotary = new Switch(&PORTD, &DDRD, &PIND, PD1);
+    sw_rotary = new AnalogSwitch(0x07, 512);
     sw_rotary->init();
     
 	fan1 = new Fan(&PORTD, &DDRD, PD6);
@@ -287,7 +287,6 @@ int main() {
     init();
     
     long lastEncoderValue = 0;
-    char lastTarget = 0;
 	unsigned long cycle = 0;
 
     while (1) {
@@ -301,16 +300,15 @@ int main() {
 			}else if(targetTemperature > temperature){
 				turnOnFans();
 				heat();
-			}/*else if(targetTemperature < temperature){
+			}else if(targetTemperature < temperature){
 				turnOnFans();
 				cool();
-			}*/else{
+			}else{
 				none();
 				turnOffFans();
 			}
     	}
     
-    	char line[16];
         if(menuEnabled){
     		cycle += 1;
 	    	cycle = cycle%400000;
@@ -342,17 +340,18 @@ int main() {
             	menuEnabled = false;
 	            temperatureMenu = false;
     		}
-            if(lastEncoderValue < encoderValue){
-            	cycle = 0;
-                ++auxTargetTemperature;
-            }else if(lastEncoderValue > encoderValue){
-            	cycle = 0;
-                --auxTargetTemperature;
-            }
-            if(auxTargetTemperature == 255){
-                auxTargetTemperature = 40;
-            }else if(auxTargetTemperature > 40){
-                auxTargetTemperature = 0;
+            if(cycle > 1000){
+                if(lastEncoderValue < encoderValue){
+                    cycle = 0;
+                    if(auxTargetTemperature < 40){
+                        ++auxTargetTemperature;
+                    }
+                }else if(lastEncoderValue > encoderValue){
+                    cycle = 0;
+                    if(auxTargetTemperature > 30){
+                        --auxTargetTemperature;
+                    }
+                }
             }
             
             if(lastEncoderValue != encoderValue){
