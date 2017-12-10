@@ -25,7 +25,7 @@
 #include "../lib/output/buzzer.h"
 #include "../lib/ext/i2chw/i2cmaster.h"
 #include "../lib/ext/dht22/dht22.h"
-#include "../lib/input/switch.h"
+#include "../lib/input/analogSwitch.h"
 #include "../lib/input/rotary.h"
 
 #define TWI_TIMEOUT 200
@@ -35,11 +35,12 @@ int errorCount = 0;
 float temperature = 0;
 float humidity = 0;
 int readErrors = 0;
+int lastRead = 0;
 unsigned char tempFlag = ' ';
 unsigned char humFlag = ' ';
 volatile unsigned char targetTemperature = 36;
 
-volatile unsigned char auxTargetTemperature = 0;
+volatile unsigned char auxTargetTemperature = 36;
 volatile bool changeTargetTemp = false;
 
 char buff[6];
@@ -56,19 +57,53 @@ const char MENU[2][20] = {
     "%c Change temp"
 };
 
+void getTempAndHum();
+
 Led* led;
 Buzzer* buzzer;
 LCD_I2C* lcd;
-Switch* sw_rotary;
+AnalogSwitch* sw_rotary;
 Fan* fan1;
 Fan* fan2;
 Relay* relay1;
 Relay* relay2;
 
+int timeToRead = 1;
 
+int tot_overflow = 0;
+ISR(TIMER1_OVF_vect)
+{
+    // keep a track of number of overflows
+    tot_overflow++;
+  
+    // check for number of overflows here itself
+    // 31 overflows = 1 seconds delay (approx.)
+    if (tot_overflow >= 31) // NOTE: '>=' used instead of '=='
+    {
+        led->toggle();
+        timeToRead = 1;
+        // no timer reset required here as the timer
+        // is reset every time it overflows
+  
+        tot_overflow = 0;   // reset overflow counter
+    }
+}
+
+void timer1_init()
+{
+    // set up timer with prescaler = 8
+	TCCR1B |= (1 << CS11);
+    // initialize counter
+    TCNT1 = 0;
+    // enable overflow interrupt
+    TIMSK1 |= (1 << TOIE1);
+  
+    // initialize overflow counter variable
+    tot_overflow = 0;
+}
 
 void turnOnFans(){
-  OCR0A=255; // 5V
+  OCR0A=255; // 12V
   OCR0B=255; // 12V
 }
 
@@ -100,24 +135,22 @@ void init(){
     TCNT0 = 0;           // Reset TCNT0
     OCR0A = 0;           // Initial the Output Compare register A & B
     OCR0B = 0;
-    OCR0A=0;	// Initial Duty Cycle for Channel A
-    OCR0B=0;	// Initial Duty Cycle for Channel B
-    
-    initRotary();
 
 	led = new Led(&PORTD, &DDRD, PD4);
     
     led->init();
 	led->toggle();
+	
+	timer1_init();
     
     lcd = new LCD_I2C(0x27, 16, 2);
     lcd->backlight(1);    
 	lcd->init();
 	
-	buzzer = new Buzzer(&PORTD, &DDRD, PD0);
-    buzzer->init();
+	/*buzzer = new Buzzer(&PORTD, &DDRD, PD0);
+    buzzer->init();*/
     
-    sw_rotary = new Switch(&PORTD, &DDRD, &PIND, PD1);
+    sw_rotary = new AnalogSwitch(0x07, 512);
     sw_rotary->init();
     
 	fan1 = new Fan(&PORTD, &DDRD, PD6);
@@ -131,15 +164,8 @@ void init(){
     relay2 = new Relay(&PORTB, &DDRB, PB0);
 	relay1->init();
 	relay2->init();
-    
-   	sei();
-}	
-
-void freeAll(){
-    delete(led);
-    delete(lcd);
-    delete(buzzer);
-    delete(sw_rotary);
+	
+    initRotary();
 }
 
 void printVars(){
@@ -190,13 +216,13 @@ void menuAction(volatile unsigned char opt){
 }
 
 void heat(){
-	relay1->close();
-   	relay2->open();
+    relay1->open();
+    relay2->close();
 }
 
 void cool(){
-	relay2->open();
-   	relay1->close();
+	relay2->close();
+   	relay1->open();
 }
 
 void none(){
@@ -209,67 +235,81 @@ void getTempAndHum(){
 	float temperature2, humidity2;
 	tempFlag = humFlag = ' ';
 	if(dht_gettemperaturehumidity(&temperature1, &humidity1, &PORTC, &PINC, &DDRC, PC0) != 0){
-   		temperature1 = -1;
-        humidity1 = -1;
-        humFlag = tempFlag = '?';
-   	}
-   	if(dht_gettemperaturehumidity(&temperature2, &humidity2, &PORTC, &PINC, &DDRC, PC1) != 0){
-   		temperature2 = -1;
-        humidity2 = -1;
-        humFlag = tempFlag = '?';
-   	}
-   	if(temperature1 < 0 && temperature2 < 0){
-   		errorCount++;
-   		if(errorCount > 10){
-   			temperature = -1;
-   		}
-   	}else if(temperature1 < 0){
-   		temperature = temperature2;
-   		errorCount = 0;
-   	}else if(temperature2 < 0){
-   		temperature = temperature1;
-   		errorCount = 0;
-   	}else{
-   		temperature = (temperature1 + temperature2) / 2;
-   		errorCount = 0;
-   	}
-   	if(tempFlag != '?'){
-   		int diff = temperature1 - temperature2;
-   		if(diff > 3 || diff < -3){
-   			tempFlag = '!';
-   		}
-   	}
-   	if(humidity1 < 0 && humidity2 < 0){
-   		humidity = -1;
-   	}else if(humidity1 < 0){
-   		humidity = humidity2;
-   	}else if(humidity2 < 0){
-   		humidity = humidity1;
-   	}else{
-   		humidity = (humidity1 + humidity2) / 2;
-   	}
-   	
-   	if(humFlag != '?'){
-   		int diff = humidity1 - humidity2;
-   		if(diff > 10 || diff < -10){
-   			humFlag = '!';
-   		}
-   	}
+		temperature1 = -1;
+		humidity1 = -1;
+		humFlag = tempFlag = '?';
+	}
+	if(dht_gettemperaturehumidity(&temperature2, &humidity2, &PORTC, &PINC, &DDRC, PC1) != 0){
+		temperature2 = -1;
+		humidity2 = -1;
+		humFlag = tempFlag = '?';
+	}
+	if(temperature1 < 0 && temperature2 < 0){
+		errorCount++;
+		if(errorCount > 10){
+			temperature = -1;
+		}
+	}else if(temperature1 < 0){
+		temperature = temperature2;
+		errorCount = 0;
+	}else if(temperature2 < 0){
+		temperature = temperature1;
+		errorCount = 0;
+	}else{
+		temperature = (temperature1 + temperature2) / 2;
+		errorCount = 0;
+	}
+	if(tempFlag != '?'){
+		int diff = temperature1 - temperature2;
+		if(diff > 3 || diff < -3){
+			tempFlag = '!';
+		}
+	}
+	if(humidity1 < 0 && humidity2 < 0){
+		humidity = -1;
+	}else if(humidity1 < 0){
+		humidity = humidity2;
+	}else if(humidity2 < 0){
+		humidity = humidity1;
+	}else{
+		humidity = (humidity1 + humidity2) / 2;
+	}
+
+	if(humFlag != '?'){
+		int diff = humidity1 - humidity2;
+		if(diff > 10 || diff < -10){
+			humFlag = '!';
+		}
+	}
 }
 
 int main() {
     init();
     
     long lastEncoderValue = 0;
-    char lastTarget = 0;
 	unsigned long cycle = 0;
-	unsigned long tempReading=0;
 
     while (1) {
-    char line[16];
-            getTempAndHum();
-    	tempReading++;
-    	if(menuEnabled){
+    	if(timeToRead > 0){
+    		timeToRead = 0;		
+			getTempAndHum();
+			
+			if(temperature < 0){
+				none();
+				turnOffFans();
+			}else if(targetTemperature > temperature){
+				turnOnFans();
+				heat();
+			}else if(targetTemperature < temperature){
+				turnOnFans();
+				cool();
+			}else{
+				none();
+				turnOffFans();
+			}
+    	}
+    
+        if(menuEnabled){
     		cycle += 1;
 	    	cycle = cycle%400000;
     		if(cycle == 0){
@@ -300,19 +340,18 @@ int main() {
             	menuEnabled = false;
 	            temperatureMenu = false;
     		}
-            if(lastEncoderValue < encoderValue){
-            	led->turnOn();
-            	cycle = 0;
-                ++auxTargetTemperature;
-            }else if(lastEncoderValue > encoderValue){
-            	led->turnOff();
-            	cycle = 0;
-                --auxTargetTemperature;
-            }
-            if(auxTargetTemperature == 255){
-                auxTargetTemperature = 40;
-            }else if(auxTargetTemperature > 40){
-                auxTargetTemperature = 0;
+            if(cycle > 1000){
+                if(lastEncoderValue < encoderValue){
+                    cycle = 0;
+                    if(auxTargetTemperature < 40){
+                        ++auxTargetTemperature;
+                    }
+                }else if(lastEncoderValue > encoderValue){
+                    cycle = 0;
+                    if(auxTargetTemperature > 30){
+                        --auxTargetTemperature;
+                    }
+                }
             }
             
             if(lastEncoderValue != encoderValue){
@@ -340,24 +379,8 @@ int main() {
         		buzzer->beep();
         		_delay_ms(250);
             }else{
-            led->toggle();
                 printVars();
             }
         }
-        if(temperature < 0){
-        	none();
-        	turnOffFans();
-        }else if(targetTemperature > temperature){
-	     	turnOnFans();
-	     	heat();
-     	}/*else if(targetTemperature < temperature){
-	     	turnOnFans();
-	     	cool();
-     	}*/else{
-			none();
-     		turnOffFans();
-     	}
 	}
-    
-    freeAll();
 }

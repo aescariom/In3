@@ -1,5 +1,5 @@
 PROJECT=brain.fabduino
-SOURCES=../lib/network/serial.c ../lib/output/lcdi2c.cpp ../lib/ext/i2chw/twimaster.c ../lib/output/led.cpp ../lib/output/buzzer.cpp ../lib/output/fan.cpp ../lib/output/relay.cpp ../lib/input/switch.cpp ../lib/input/rotary.c ../lib/ext/dht22/dht22.c ../lib/operators/new.c $(PROJECT).c
+SOURCES=../lib/network/serial.c ../lib/output/lcdi2c.cpp ../lib/ext/i2chw/twimaster.c ../lib/output/led.cpp ../lib/output/buzzer.cpp ../lib/output/fan.cpp ../lib/output/relay.cpp ../lib/input/analogSwitch.cpp ../lib/input/rotary.c ../lib/ext/dht22/dht22.c ../lib/operators/new.c $(PROJECT).c
 MMCU=atmega328p
 F_CPU = 16000000
 
